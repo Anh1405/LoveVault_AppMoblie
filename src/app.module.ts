@@ -9,7 +9,9 @@ import { CoupleModule } from './couple/couple.module';
 import { MediaModule } from './media/media.module';
 import { PostsModule } from './posts/posts.module';
 import { TimeCapsuleModule } from './time-capsule/time-capsule.module';
+import { AiModule } from './ai/ai.module';
 import { AppController } from './app.controller';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -33,6 +35,7 @@ import { AppController } from './app.controller';
     MediaModule,
     PostsModule,
     TimeCapsuleModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [
