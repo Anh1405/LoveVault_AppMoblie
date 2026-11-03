@@ -36,7 +36,10 @@ export class CoupleService {
     ) {
       const ttlSeconds = Math.max(
         0,
-        Math.floor((existingCouple.pairingCodeExpiresAt.getTime() - now.getTime()) / 1000),
+        Math.floor(
+          (existingCouple.pairingCodeExpiresAt.getTime() - now.getTime()) /
+            1000,
+        ),
       );
 
       return {
@@ -79,7 +82,8 @@ export class CoupleService {
     return this.prisma.$transaction(async (tx) => {
       const currentUser = await tx.user.findUnique({ where: { id: userId } });
       if (!currentUser) throw new NotFoundException('Tài khoản không tồn tại.');
-      if (currentUser.coupleId) throw new BadRequestException('Bạn đã thuộc một cặp đôi khác.');
+      if (currentUser.coupleId)
+        throw new BadRequestException('Bạn đã thuộc một cặp đôi khác.');
 
       const pendingCouple = await tx.couple.findFirst({
         where: {
@@ -90,7 +94,9 @@ export class CoupleService {
       });
 
       if (!pendingCouple) {
-        throw new NotFoundException('Mã ghép đôi không hợp lệ hoặc đã hết hạn.');
+        throw new NotFoundException(
+          'Mã ghép đôi không hợp lệ hoặc đã hết hạn.',
+        );
       }
 
       if (pendingCouple.user1Id === userId) {
@@ -135,20 +141,64 @@ export class CoupleService {
       where: { id: coupleId },
     });
 
-    if (!couple) throw new NotFoundException('Không tìm thấy thông tin cặp đôi.');
+    if (!couple)
+      throw new NotFoundException('Không tìm thấy thông tin cặp đôi.');
 
-    const userTz = DateTime.now().setZone(timezone).isValid ? timezone : 'Asia/Ho_Chi_Minh';
+    const userTz = DateTime.now().setZone(timezone).isValid
+      ? timezone
+      : 'Asia/Ho_Chi_Minh';
 
-    const startDateInTz = DateTime.fromJSDate(couple.anniversaryDate).setZone(userTz).startOf('day');
+    const startDateInTz = DateTime.fromJSDate(couple.anniversaryDate)
+      .setZone(userTz)
+      .startOf('day');
     const todayInTz = DateTime.now().setZone(userTz).startOf('day');
 
-    const daysTogether = Math.floor(todayInTz.diff(startDateInTz, 'days').days) + 1;
+    const daysTogether =
+      Math.floor(todayInTz.diff(startDateInTz, 'days').days) + 1;
 
     return {
       coupleId: couple.id,
       daysTogether: Math.max(1, daysTogether),
       startDate: startDateInTz.toISODate(),
       timezone: userTz,
+    };
+  }
+
+  async updateAnniversary(
+    coupleId: string,
+    anniversaryDate: string,
+    timezone?: string,
+  ) {
+    if (
+      typeof anniversaryDate !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(anniversaryDate)
+    ) {
+      throw new BadRequestException('Ngày kỷ niệm phải có dạng YYYY-MM-DD.');
+    }
+
+    // Cột anniversaryDate là kiểu DATE thuần, lưu 00:00 UTC của đúng ngày đó
+    const parsed = DateTime.fromISO(anniversaryDate, { zone: 'utc' });
+    if (!parsed.isValid) {
+      throw new BadRequestException('Ngày kỷ niệm không hợp lệ.');
+    }
+
+    const validTimezone =
+      timezone && DateTime.now().setZone(timezone).isValid
+        ? timezone
+        : undefined;
+
+    const couple = await this.prisma.couple.update({
+      where: { id: coupleId },
+      data: {
+        anniversaryDate: parsed.toJSDate(),
+        ...(validTimezone ? { canonicalTimezone: validTimezone } : {}),
+      },
+    });
+
+    return {
+      coupleId: couple.id,
+      anniversaryDate,
+      timezone: couple.canonicalTimezone,
     };
   }
 }

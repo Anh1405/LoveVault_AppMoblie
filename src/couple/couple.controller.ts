@@ -73,6 +73,19 @@ export class CoupleController {
     return this.coupleService.getDayCounter(req.coupleId, clientTimezone);
   }
 
+  @Patch('couples/anniversary')
+  @UseGuards(CoupleTenantGuard)
+  updateAnniversary(
+    @Req() req: any,
+    @Body() body: { anniversaryDate?: string; timezone?: string },
+  ) {
+    return this.coupleService.updateAnniversary(
+      req.coupleId,
+      body?.anniversaryDate as string,
+      body?.timezone,
+    );
+  }
+
   // Trả về object phẳng, app đọc bằng res.data?.settings || res.data
   @Get('couples/shared-settings')
   @UseGuards(CoupleTenantGuard)
