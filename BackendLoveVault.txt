@@ -1,0 +1,60 @@
+lovevault-backend/
+├── docker-compose.yml
+├── package.json
+├── tsconfig.json
+├── .env
+├── prisma/
+│   └── schema.prisma
+└── src/
+    ├── main.ts                        # File khởi tạo NestJS app
+    ├── app.module.ts                  # Root Module tích hợp toàn bộ các tính năng
+    │
+    ├── prisma/                        # Global Database ORM Module (Giai đoạn 1)
+    │   ├── prisma.module.ts
+    │   └── prisma.service.ts
+    │
+    ├── common/                        # Guard & Utility dùng chung (Giai đoạn 1)
+    │   └── guards/
+    │       └── couple-tenant.guard.ts # Guard trích xuất & bảo mật coupleId
+    │
+    ├── auth/                          # Module Đăng ký, Đăng nhập & JWT (Giai đoạn 1)
+    │   ├── dto/
+    │   │   └── auth.dto.ts
+    │   ├── guards/
+    │   │   └── jwt-auth.guard.ts
+    │   ├── strategies/
+    │   │   └── jwt.strategy.ts
+    │   ├── auth.controller.ts
+    │   ├── auth.module.ts
+    │   └── auth.service.ts
+    │
+    ├── couple/                        # Module Ghép đôi & Đếm ngày yêu (Giai đoạn 2 - Sprint 1 & 2)
+    │   ├── dto/
+    │   │   └── couple.dto.ts
+    │   ├── couple.controller.ts
+    │   ├── couple.module.ts
+    │   └── couple.service.ts
+    │
+    ├── media/                         # Module Sinh Presigned URL S3/R2 (Giai đoạn 2 - Sprint 3)
+    │   ├── dto/
+    │   │   └── media.dto.ts
+    │   ├── media.controller.ts
+    │   ├── media.module.ts
+    │   └── media.service.ts
+    │
+    ├── posts/                         # Module Kỷ niệm & Timeline Cursor Pagination (Giai đoạn 2 - Sprint 4)
+    │   ├── dto/
+    │   │   └── post.dto.ts
+    │   ├── posts.controller.ts
+    │   ├── posts.module.ts
+    │   └── posts.service.ts
+    │
+    └── time-capsule/                  # Module Thư thời gian & BullMQ Worker (Giai đoạn 2 - Sprint 5)
+        ├── dto/
+        │   └── time-capsule.dto.ts
+        ├── time-capsule.controller.ts
+        ├── time-capsule.module.ts
+        ├── time-capsule.processor.ts # Worker lắng nghe job mở thư tự động
+        └── time-capsule.service.ts
+
+Để dễ hình dung tại sao xóa app tải lại mà dữ liệu vẫn còn nguyên, bạn cần phân biệt 3 nơi lưu trữ sau:Bộ nhớ Local trên điện thoại (storage trong React Native):Đây là nơi hàm storage.setItem trong useCoupleWorkspace.ts và HomeScreen.tsx đang lưu tạm trên chiếc điện thoại của người dùng. Khi người dùng xóa app trên điện thoại, phần bộ nhớ này sẽ bị xóa sạch.   Database PostgreSQL (schema.prisma ở Backend):Đây là Database riêng quản lý các bảng users, couples, milestones, couple_goals, couple_media.... Vì nó nằm ở phía Server (Backend), nên dù hai người dùng có xóa app trên điện thoại hay đổi sang điện thoại mới, dữ liệu trong PostgreSQL vẫn còn nguyên 100%. Khi đăng nhập lại và vào đúng phòng (coupleId), app chỉ cần gọi API lấy dữ liệu từ PostgreSQL này về là khôi phục lại toàn bộ.   Lưu ý về chỗ đặt PostgreSQL (DATABASE_URL trong .env):   Nếu DATABASE_URL của bạn đang điền là postgresql://postgres:...@localhost:5432/...: Database PostgreSQL này đang nằm trên ổ cứng máy tính (laptop) của bạn. Điện thoại xóa app tải lại vẫn lấy lại được dữ liệu bình thường, miễn là laptop của bạn đang bật và chạy Backend.Nếu bạn muốn tắt laptop mà hai người vẫn dùng app được 24/7: Bạn chỉ cần tạo 1 project miễn phí trên Neon.tech hoặc Supabase, lấy chuỗi DATABASE_URL trên Cloud của họ dán vào file .env (rồi chạy npx prisma db push) là toàn bộ Database PostgreSQL này sẽ nằm trên Cloud 24/7.   Cloud Object Storage (S3 / Cloudflare R2) cho Ảnh & Video:Database PostgreSQL chỉ dùng để lưu chữ, số, JSON và đường dẫn ảnh (remoteUrl) trong bảng CoupleMedia. Còn bản thân file ảnh/video nặng hàng chục MB sẽ được cloudMediaService.ts đẩy lên S3 hoặc Cloudflare R2 thông qua presigned.uploadUrl. 

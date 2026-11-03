@@ -1,0 +1,309 @@
+// schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum CoupleStatus {
+  PENDING // Đang chờ đối phương nhập mã ghép đôi
+  ACTIVE // Đã ghép đôi thành công
+  PAUSED // Tạm khóa / Giận nhau (Grace period trước khi xóa)
+  DISCONNECTED // Đã hủy ghép đôi
+}
+
+enum PostType {
+  MEMORY // Bài viết kỷ niệm thông thường
+  ANNIVERSARY // Bài viết tự động/đặc biệt nhân ngày kỷ niệm
+  DAILY_MOMENT // Khoảnh khắc hàng ngày
+  VIDEO_NOTE // Video ngắn
+}
+
+enum MilestoneCategory {
+  FIRST_MEET
+  FIRST_DATE
+  OFFICIAL_COUPLE
+  TRIP
+  ENGAGEMENT
+  WEDDING
+  CUSTOM
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  APPLE
+}
+
+enum MediaCategory {
+  ALBUM_MEDIA
+  LOCKET_SNAP
+  TIME_CAPSULE
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+// ==========================================
+// MODELS
+// ==========================================
+
+model User {
+  id             String  @id @default(uuid()) @db.Uuid
+  email          String  @unique @db.VarChar(255) // Email hiển thị (đã lowercase + xóa cách)
+  canonicalEmail String  @unique @map("canonical_email") @db.VarChar(255) // Email gốc chống trùng Gmail (bỏ dấu chấm, bỏ +tag)
+  passwordHash   String? @map("password_hash") @db.VarChar(255) // Nullable cho phép đăng nhập Google/Apple không cần pass
+  fullName       String  @map("full_name") @db.VarChar(100)
+  avatarUrl      String? @map("avatar_url") @db.Text
+
+  authProvider AuthProvider @default(LOCAL) @map("auth_provider")
+  googleId     String?      @unique @map("google_id") @db.VarChar(128)
+  appleId      String?      @unique @map("apple_id") @db.VarChar(128)
+
+  partnerId String? @unique @map("partner_id") @db.Uuid
+  partner   User?   @relation("UserPartner", fields: [partnerId], references: [id], onDelete: SetNull)
+  partnerOf User?   @relation("UserPartner")
+
+  coupleId String? @map("couple_id") @db.Uuid
+  couple   Couple? @relation("CoupleMembers", fields: [coupleId], references: [id], onDelete: SetNull)
+
+  timezone  String   @default("Asia/Ho_Chi_Minh") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions       UserSession[]
+  couplesAsUser1 Couple[]      @relation("CoupleUser1")
+  couplesAsUser2 Couple[]      @relation("CoupleUser2")
+  posts          Post[]
+  timeCapsules   TimeCapsule[]
+  dailyAnswers   DailyAnswer[]
+  coupleMedias   CoupleMedia[]
+
+  @@index([coupleId])
+  @@index([canonicalEmail])
+  @@map("users")
+}
+
+model UserSession {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceId         String  @map("device_id") @db.VarChar(128)
+  deviceName       String? @map("device_name") @db.VarChar(100)
+  pushToken        String? @map("push_token") @db.Text
+  refreshTokenHash String  @unique @map("refresh_token_hash") @db.VarChar(255)
+
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz(3)
+  lastActiveAt DateTime @default(now()) @map("last_active_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, deviceId]) // Mỗi thiết bị chỉ giữ 1 phiên hoạt động cho 1 user
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+model Couple {
+  id String @id @default(uuid()) @db.Uuid
+
+  user1Id String @map("user1_id") @db.Uuid
+  user1   User   @relation("CoupleUser1", fields: [user1Id], references: [id], onDelete: Cascade)
+
+  user2Id String? @map("user2_id") @db.Uuid
+  user2   User?   @relation("CoupleUser2", fields: [user2Id], references: [id], onDelete: SetNull)
+
+  // Lưu kiểu DATE thuần túy (YYYY-MM-DD) để không bị trôi giờ theo UTC
+  anniversaryDate   DateTime @default(now()) @map("anniversary_date") @db.Date
+  // Múi giờ chuẩn của cặp đôi để tính mốc 00:00:00 ngày mới
+  canonicalTimezone String   @default("Asia/Ho_Chi_Minh") @map("canonical_timezone") @db.VarChar(64)
+
+  pairingCode          String?   @unique @map("pairing_code") @db.VarChar(6)
+  pairingCodeExpiresAt DateTime? @map("pairing_code_expires_at") @db.Timestamptz(3)
+
+  sharedSettings Json? @map("shared_settings") @db.JsonB // Lưu themePreset, heroWallpaperUri, momoFund, loveCoupons, streakDays...
+
+  status    CoupleStatus @default(PENDING)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Relations
+  members        User[]                @relation("CoupleMembers")
+  workspaceState CoupleWorkspaceState?
+  posts          Post[]
+  milestones     Milestone[]
+  timeCapsules   TimeCapsule[]
+  dailyAnswers   DailyAnswer[]
+  goals          CoupleGoal[]
+  coupleMedias   CoupleMedia[]
+
+  @@index([pairingCode, status])
+  @@index([user1Id, user2Id])
+  @@map("couples")
+}
+
+model CoupleWorkspaceState {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @unique @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  events    Json  @default("[]") @db.JsonB // Lưu toàn bộ ImportantEvent[] kèm DatePlanDetails & BusRouteItinerary
+  goals     Json  @default("[]") @db.JsonB // Lưu toàn bộ CoupleGoalItem[] kèm momoTransactions[]
+  dailyQA   Json? @map("daily_qa") @db.JsonB // Lưu câu hỏi hôm nay và câu trả lời của 2 người
+  qaHistory Json  @default("[]") @map("qa_history") @db.JsonB // Lưu toàn bộ lịch sử hỏi đáp
+
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("couple_workspace_states")
+}
+
+model Post {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  authorId String @map("author_id") @db.Uuid
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  content   String?  @db.Text
+  mediaUrls String[] @map("media_urls") @db.Text // Mảng URL ảnh/video
+
+  // Lưu tên địa điểm hoặc cấu trúc JSON { name, lat, lng, placeId }
+  location Json?    @db.JsonB
+  postType PostType @default(MEMORY) @map("post_type")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Index phục vụ Cursor-based Pagination theo từng cặp đôi
+  @@index([coupleId, createdAt(sort: Desc), id])
+  @@map("posts")
+}
+
+model Milestone {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  title     String            @db.VarChar(200)
+  eventDate DateTime          @map("event_date") @db.Date
+  mediaUrl  String?           @map("media_url") @db.Text
+  category  MilestoneCategory @default(CUSTOM)
+
+  // Cấu hình thông báo tùy chỉnh của người dùng
+  notifyDaysBefore  Int     @default(1) @map("notify_days_before") // 0: Đúng ngày, 1: Trước 1 ngày, 7: Trước 1 tuần
+  notifyAtTime      String  @default("09:00") @map("notify_at_time") @db.VarChar(5) // Định dạng HH:mm
+  customMessage     String? @map("custom_message") @db.VarChar(255)
+  isRecurringYearly Boolean @default(true) @map("is_recurring_yearly")
+  idempotencyKey    String? @unique @map("idempotency_key") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([coupleId, eventDate(sort: Asc)])
+  @@map("milestones")
+}
+
+model TimeCapsule {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  senderId String @map("sender_id") @db.Uuid
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  content  String    @db.Text
+  mediaUrl String?   @map("media_url") @db.Text
+  unlockAt DateTime  @map("unlock_at") @db.Timestamptz(3)
+  isOpened Boolean   @default(false) @map("is_opened")
+  openedAt DateTime? @map("opened_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([coupleId, unlockAt(sort: Asc)])
+  @@index([isOpened, unlockAt]) // Phục vụ Cronjob quét các hộp thư đến hạn mở
+  @@map("time_capsules")
+}
+
+model DailyQuestion {
+  id           String    @id @default(uuid()) @db.Uuid
+  questionText String    @map("question_text") @db.Text
+  category     String    @db.VarChar(50)
+  activeDate   DateTime? @unique @map("active_date") @db.Date
+
+  answers DailyAnswer[]
+
+  @@map("daily_questions")
+}
+
+model DailyAnswer {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  questionId String        @map("question_id") @db.Uuid
+  question   DailyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  answer    String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  // Mỗi thành viên trong cặp đôi chỉ được trả lời 1 lần cho mỗi câu hỏi
+  @@unique([coupleId, questionId, userId])
+  @@index([coupleId, questionId])
+  @@map("daily_answers")
+}
+
+model CoupleGoal {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  title               String    @db.VarChar(200)
+  targetDate          DateTime  @map("target_date") @db.Date
+  isCompleted         Boolean   @default(false) @map("is_completed")
+  notifyAt            DateTime? @map("notify_at") @db.Timestamptz(3)
+  customNotifyMessage String?   @map("custom_notify_message") @db.VarChar(255)
+  idempotencyKey      String?   @unique @map("idempotency_key") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([coupleId, isCompleted, targetDate(sort: Asc)])
+  @@map("couple_goals")
+}
+
+model CoupleMedia {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  uploaderId String @map("uploader_id") @db.Uuid
+  uploader   User   @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  category       MediaCategory @default(ALBUM_MEDIA)
+  mediaType      MediaType     @default(IMAGE) @map("media_type")
+  fileKey        String        @unique @map("file_key") @db.VarChar(512)
+  remoteUrl      String        @map("remote_url") @db.Text
+  thumbnailUrl   String?       @map("thumbnail_url") @db.Text
+  caption        String?       @db.VarChar(500)
+  stamp          String?       @db.VarChar(120)
+  durationSec    Int?          @map("duration_sec")
+  reactions      Json          @default("[]") @db.JsonB
+  idempotencyKey String?       @unique @map("idempotency_key") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([coupleId, category, createdAt(sort: Desc), id])
+  @@map("couple_media")
+}
