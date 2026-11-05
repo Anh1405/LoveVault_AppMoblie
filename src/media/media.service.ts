@@ -205,7 +205,9 @@ export class MediaService {
       : [];
 
     const nextReactions = [
-      ...currentReactions.filter((r) => r.userId !== userId || r.emoji !== emoji),
+      ...currentReactions.filter(
+        (r) => r.userId !== userId || r.emoji !== emoji,
+      ),
       {
         id: `${userId}_${Date.now()}`,
         userId,
@@ -288,3 +290,4 @@ export class MediaService {
 
     return { deleted: true, id: target.id };
   }
+}
