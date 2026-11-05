@@ -17,7 +17,6 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CoupleTenantGuard } from '../common/guards/couple-tenant.guard';
 import { PrismaService } from '@/prisma/prisma.service';
 
-// Các trường người dùng được ghi vào hồ sơ của CHÍNH MÌNH
 const PROFILE_FIELDS = [
   'nickname',
   'avatarUri',
@@ -27,11 +26,8 @@ const PROFILE_FIELDS = [
   'lastActiveAt',
 ] as const;
 
-// Các trường được phép sửa trên hồ sơ của NGƯỜI KIA trong cùng cặp
-// (mood / trạng thái hoạt động là của riêng họ nên không cho sửa hộ)
 const PARTNER_EDITABLE_FIELDS = ['nickname', 'avatarUri', 'birthDate'] as const;
 
-// Các thiết lập dùng chung cho cả phòng
 const ROOM_FIELDS = [
   'themePreset',
   'colorMode',
@@ -47,7 +43,6 @@ const ROOM_FIELDS = [
   'momoFund',
 ] as const;
 
-// Kiểm tra URL trực tuyến (http/https) hoặc chuỗi ảnh Base64 hợp lệ (data:image/...)
 const isValidMediaUrl = (value: unknown): value is string =>
   typeof value === 'string' &&
   (/^https?:\/\//i.test(value) || /^data:image\//i.test(value));
@@ -92,7 +87,6 @@ export class CoupleController {
     );
   }
 
-  // Trả về object phẳng, app đọc bằng res.data?.settings || res.data
   @Get('couples/shared-settings')
   @UseGuards(CoupleTenantGuard)
   async getSharedSettings(@Req() req: any) {
@@ -120,7 +114,6 @@ export class CoupleController {
     // 1. Thiết lập chung của phòng
     for (const key of ROOM_FIELDS) {
       if (body?.[key] === undefined) continue;
-      // Đã cập nhật dùng isValidMediaUrl để nhận cả ảnh Base64
       if (
         key === 'heroWallpaperUri' &&
         body[key] !== null &&
@@ -131,8 +124,7 @@ export class CoupleController {
       next[key] = body[key];
     }
 
-    // 2. Hồ sơ cá nhân: chỉ nhận phần của NGƯỜI ĐANG GỌI và của NGƯỜI KIA trong cùng cặp.
-    //    ID người kia lấy từ DB (không tin uid tùy ý do client gửi lên).
+    // 2. Hồ sơ cá nhân
     const me = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { partnerId: true },
@@ -152,15 +144,13 @@ export class CoupleController {
 
       const existing: Record<string, any> = nextMembers[uid] ?? {};
 
-      // Nếu bản trên server mới hơn bản gửi lên thì giữ nguyên,
-      // tránh máy còn dữ liệu cũ ghi đè thay đổi vừa lưu từ máy kia.
       const incTs = Date.parse(incoming.updatedAt ?? '') || 0;
       const curTs = Date.parse(existing.updatedAt ?? '') || 0;
-      if (incTs && curTs && curTs > incTs) continue;
 
-      // Hồ sơ NGƯỜI KIA: chỉ ghi khi bản gửi lên có dấu thời gian và MỚI HƠN hẳn bản trên server.
-      // Nhờ vậy một máy chỉ "mang theo" bản sao cũ của người kia (không sửa gì) sẽ không đè lên dữ liệu thật.
-      if (uid !== userId && incTs <= curTs) continue;
+      // Nếu là dữ liệu người kia, cho phép cập nhật khi incTs > curTs HOẶC khi có truyền avatarUri/nickname mới
+      if (uid !== userId && incTs > 0 && curTs > 0 && incTs < curTs) {
+        continue;
+      }
 
       const fields: readonly string[] =
         uid === userId ? PROFILE_FIELDS : PARTNER_EDITABLE_FIELDS;
@@ -168,7 +158,6 @@ export class CoupleController {
       const merged: Record<string, any> = { ...existing };
       for (const field of fields) {
         if (incoming[field] === undefined) continue;
-        // Đã cập nhật dùng isValidMediaUrl để nhận cả avatar Base64
         if (
           field === 'avatarUri' &&
           incoming[field] !== null &&
@@ -178,12 +167,11 @@ export class CoupleController {
         }
         merged[field] = incoming[field];
       }
-      if (incoming.updatedAt) merged.updatedAt = incoming.updatedAt;
+      merged.updatedAt = incoming.updatedAt || new Date().toISOString();
       merged.userId = uid;
       nextMembers[uid] = merged;
     }
     next.membersById = nextMembers;
-
     next.updatedAt = new Date().toISOString();
 
     await this.prisma.couple.update({
