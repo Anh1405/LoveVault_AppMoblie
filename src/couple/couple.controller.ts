@@ -17,16 +17,16 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CoupleTenantGuard } from '../common/guards/couple-tenant.guard';
 import { PrismaService } from '@/prisma/prisma.service';
 
+// avatarUri KHÔNG nằm trong 2 danh sách này: avatar được xử lý riêng theo avatarUpdatedAt
 const PROFILE_FIELDS = [
   'nickname',
-  'avatarUri',
   'birthDate',
   'moodEmoji',
   'customStatusText',
   'lastActiveAt',
 ] as const;
 
-const PARTNER_EDITABLE_FIELDS = ['nickname', 'avatarUri', 'birthDate'] as const;
+const PARTNER_EDITABLE_FIELDS = ['nickname', 'birthDate'] as const;
 
 const ROOM_FIELDS = [
   'themePreset',
@@ -46,6 +46,12 @@ const ROOM_FIELDS = [
 const isValidMediaUrl = (value: unknown): value is string =>
   typeof value === 'string' &&
   (/^https?:\/\//i.test(value) || /^data:image\//i.test(value));
+
+const parseTs = (value: unknown): number => {
+  if (typeof value !== 'string') return 0;
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? 0 : t;
+};
 
 @Controller('api/v1')
 @UseGuards(JwtAuthGuard)
@@ -143,31 +149,44 @@ export class CoupleController {
       if (!incoming || typeof incoming !== 'object') continue;
 
       const existing: Record<string, any> = nextMembers[uid] ?? {};
-
-      const incTs = Date.parse(incoming.updatedAt ?? '') || 0;
-      const curTs = Date.parse(existing.updatedAt ?? '') || 0;
-
-      // Nếu là dữ liệu người kia, cho phép cập nhật khi incTs > curTs HOẶC khi có truyền avatarUri/nickname mới
-      if (uid !== userId && incTs > 0 && curTs > 0 && incTs < curTs) {
-        continue;
-      }
-
-      const fields: readonly string[] =
-        uid === userId ? PROFILE_FIELDS : PARTNER_EDITABLE_FIELDS;
-
       const merged: Record<string, any> = { ...existing };
-      for (const field of fields) {
-        if (incoming[field] === undefined) continue;
-        if (
-          field === 'avatarUri' &&
-          incoming[field] !== null &&
-          !isValidMediaUrl(incoming[field])
-        ) {
-          continue;
+
+      // 2a. AVATAR: có "cổng" riêng theo avatarUpdatedAt, độc lập với các trường khác.
+      //     - null / rỗng / sai định dạng => bỏ qua, không bao giờ xóa avatar qua đồng bộ
+      //     - bản cache cũ không có avatarUpdatedAt không thể đè lên avatar đang có trên server
+      if (isValidMediaUrl(incoming.avatarUri)) {
+        const incAvTs = parseTs(incoming.avatarUpdatedAt);
+        const curAvTs = parseTs(existing.avatarUpdatedAt);
+        const hasExistingAvatar = isValidMediaUrl(existing.avatarUri);
+        if (!hasExistingAvatar || incAvTs > curAvTs) {
+          merged.avatarUri = incoming.avatarUri;
+          if (incoming.avatarUpdatedAt) {
+            merged.avatarUpdatedAt = incoming.avatarUpdatedAt;
+          }
         }
-        merged[field] = incoming[field];
       }
-      merged.updatedAt = incoming.updatedAt || new Date().toISOString();
+
+      // 2b. Các trường còn lại: chỉ chặn dữ liệu cũ khi đó là hồ sơ của NGƯỜI KIA
+      const incTs = parseTs(incoming.updatedAt);
+      const curTs = parseTs(existing.updatedAt);
+      const profileStale =
+        uid !== userId && incTs > 0 && curTs > 0 && incTs < curTs;
+
+      if (!profileStale) {
+        const fields: readonly string[] =
+          uid === userId ? PROFILE_FIELDS : PARTNER_EDITABLE_FIELDS;
+        for (const field of fields) {
+          if (incoming[field] === undefined) continue;
+          merged[field] = incoming[field];
+        }
+        // Không tự bịa timestamp: giữ mốc mới nhất trong số hai bên (nếu có)
+        const latestTs = Math.max(incTs, curTs);
+        if (latestTs > 0) {
+          merged.updatedAt =
+            incTs >= curTs ? incoming.updatedAt : existing.updatedAt;
+        }
+      }
+
       merged.userId = uid;
       nextMembers[uid] = merged;
     }
