@@ -17,7 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CoupleTenantGuard } from '../common/guards/couple-tenant.guard';
 import { PrismaService } from '@/prisma/prisma.service';
 
-// Mỗi người chỉ được ghi các trường này vào hồ sơ của chính mình
+// Các trường người dùng được ghi vào hồ sơ của CHÍNH MÌNH
 const PROFILE_FIELDS = [
   'nickname',
   'avatarUri',
@@ -26,6 +26,10 @@ const PROFILE_FIELDS = [
   'customStatusText',
   'lastActiveAt',
 ] as const;
+
+// Các trường được phép sửa trên hồ sơ của NGƯỜI KIA trong cùng cặp
+// (mood / trạng thái hoạt động là của riêng họ nên không cho sửa hộ)
+const PARTNER_EDITABLE_FIELDS = ['nickname', 'avatarUri', 'birthDate'] as const;
 
 // Các thiết lập dùng chung cho cả phòng
 const ROOM_FIELDS = [
@@ -125,26 +129,58 @@ export class CoupleController {
       next[key] = body[key];
     }
 
-    // 2. Hồ sơ cá nhân: chỉ nhận phần của người đang gọi, bỏ qua mọi entry khác
-    const incomingMine = body?.membersById?.[userId];
-    if (incomingMine && typeof incomingMine === 'object') {
-      const mine: Record<string, any> = {
-        ...(current.membersById?.[userId] ?? {}),
-      };
-      for (const field of PROFILE_FIELDS) {
-        if (incomingMine[field] === undefined) continue;
+    // 2. Hồ sơ cá nhân: chỉ nhận phần của NGƯỜI ĐANG GỌI và của NGƯỜI KIA trong cùng cặp.
+    //    ID người kia lấy từ DB (không tin uid tùy ý do client gửi lên).
+    const me = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { partnerId: true },
+    });
+    const partnerId = me?.partnerId ? String(me.partnerId) : null;
+
+    const incomingMembers: Record<string, any> =
+      body?.membersById && typeof body.membersById === 'object'
+        ? body.membersById
+        : {};
+    const nextMembers: Record<string, any> = { ...(current.membersById ?? {}) };
+
+    for (const uid of [userId, partnerId]) {
+      if (!uid) continue;
+      const incoming = incomingMembers[uid];
+      if (!incoming || typeof incoming !== 'object') continue;
+
+      const existing: Record<string, any> = nextMembers[uid] ?? {};
+
+      // Nếu bản trên server mới hơn bản gửi lên thì giữ nguyên,
+      // tránh máy còn dữ liệu cũ ghi đè thay đổi vừa lưu từ máy kia.
+      const incTs = Date.parse(incoming.updatedAt ?? '') || 0;
+      const curTs = Date.parse(existing.updatedAt ?? '') || 0;
+      if (incTs && curTs && curTs > incTs) continue;
+
+      // Hồ sơ NGƯỜI KIA: chỉ ghi khi bản gửi lên có dấu thời gian và MỚI HƠN hẳn bản trên server.
+      // Nhờ vậy một máy chỉ "mang theo" bản sao cũ của người kia (không sửa gì) sẽ không đè lên dữ liệu thật.
+      if (uid !== userId && incTs <= curTs) continue;
+
+      const fields: readonly string[] =
+        uid === userId ? PROFILE_FIELDS : PARTNER_EDITABLE_FIELDS;
+
+      const merged: Record<string, any> = { ...existing };
+      for (const field of fields) {
+        if (incoming[field] === undefined) continue;
+        // Ảnh Base64 / đường dẫn file nội bộ không dùng được trên máy khác
         if (
           field === 'avatarUri' &&
-          incomingMine[field] !== null &&
-          !isHttpUrl(incomingMine[field])
+          incoming[field] !== null &&
+          !isHttpUrl(incoming[field])
         ) {
           continue;
         }
-        mine[field] = incomingMine[field];
+        merged[field] = incoming[field];
       }
-      mine.userId = userId;
-      next.membersById = { ...(current.membersById ?? {}), [userId]: mine };
+      if (incoming.updatedAt) merged.updatedAt = incoming.updatedAt;
+      merged.userId = uid;
+      nextMembers[uid] = merged;
     }
+    next.membersById = nextMembers;
 
     next.updatedAt = new Date().toISOString();
 
