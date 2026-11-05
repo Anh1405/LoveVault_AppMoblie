@@ -47,8 +47,10 @@ const ROOM_FIELDS = [
   'momoFund',
 ] as const;
 
-const isHttpUrl = (value: unknown): value is string =>
-  typeof value === 'string' && /^https?:\/\//i.test(value);
+// Kiểm tra URL trực tuyến (http/https) hoặc chuỗi ảnh Base64 hợp lệ (data:image/...)
+const isValidMediaUrl = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  (/^https?:\/\//i.test(value) || /^data:image\//i.test(value));
 
 @Controller('api/v1')
 @UseGuards(JwtAuthGuard)
@@ -118,11 +120,11 @@ export class CoupleController {
     // 1. Thiết lập chung của phòng
     for (const key of ROOM_FIELDS) {
       if (body?.[key] === undefined) continue;
-      // Đường dẫn file nội bộ của máy khác không dùng được, giữ giá trị cũ trên server
+      // Đã cập nhật dùng isValidMediaUrl để nhận cả ảnh Base64
       if (
         key === 'heroWallpaperUri' &&
         body[key] !== null &&
-        !isHttpUrl(body[key])
+        !isValidMediaUrl(body[key])
       ) {
         continue;
       }
@@ -166,11 +168,11 @@ export class CoupleController {
       const merged: Record<string, any> = { ...existing };
       for (const field of fields) {
         if (incoming[field] === undefined) continue;
-        // Ảnh Base64 / đường dẫn file nội bộ không dùng được trên máy khác
+        // Đã cập nhật dùng isValidMediaUrl để nhận cả avatar Base64
         if (
           field === 'avatarUri' &&
           incoming[field] !== null &&
-          !isHttpUrl(incoming[field])
+          !isValidMediaUrl(incoming[field])
         ) {
           continue;
         }
