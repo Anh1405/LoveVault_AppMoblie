@@ -97,6 +97,32 @@ export class MediaService {
       return existingByKey;
     }
 
+    // Nếu là Hero Wallpaper mới -> Tự động xóa các Hero Wallpaper cũ trên S3 & Supabase DB
+    if (dto.caption === 'Hero Wallpaper') {
+      const oldWallpapers = await this.prisma.coupleMedia.findMany({
+        where: { coupleId, caption: 'Hero Wallpaper' },
+      });
+      for (const oldItem of oldWallpapers) {
+        if (oldItem.fileKey) {
+          await this.s3Client
+            .send(
+              new DeleteObjectCommand({
+                Bucket: this.bucketName,
+                Key: oldItem.fileKey,
+              }),
+            )
+            .catch(() => null);
+        }
+      }
+      if (oldWallpapers.length > 0) {
+        await this.prisma.coupleMedia
+          .deleteMany({
+            where: { id: { in: oldWallpapers.map((w) => w.id) } },
+          })
+          .catch(() => null);
+      }
+    }
+
     const createdMedia = await this.prisma.$transaction(async (tx) => {
       const mediaRecord = await tx.coupleMedia.create({
         data: {
@@ -114,21 +140,23 @@ export class MediaService {
         },
       });
 
-      // Đồng bộ sang bảng posts để tương thích ngược với feed kỷ niệm cũ
-      await tx.post.create({
-        data: {
-          coupleId,
-          authorId: uploaderId,
-          content: dto.caption || dto.stamp || null,
-          mediaUrls: [dto.remoteUrl],
-          postType:
-            dto.category === 'LOCKET_SNAP'
-              ? 'DAILY_MOMENT'
-              : dto.mediaType === 'VIDEO'
-                ? 'VIDEO_NOTE'
-                : 'MEMORY',
-        },
-      });
+      // Không tạo bài post rác nếu chỉ là ảnh hệ thống (thumbnail video hoặc Hero Wallpaper)
+      if (dto.caption !== 'thumbnail' && dto.caption !== 'Hero Wallpaper') {
+        await tx.post.create({
+          data: {
+            coupleId,
+            authorId: uploaderId,
+            content: dto.caption || dto.stamp || null,
+            mediaUrls: [dto.remoteUrl],
+            postType:
+              dto.category === 'LOCKET_SNAP'
+                ? 'DAILY_MOMENT'
+                : dto.mediaType === 'VIDEO'
+                  ? 'VIDEO_NOTE'
+                  : 'MEMORY',
+          },
+        });
+      }
 
       return mediaRecord;
     });
@@ -201,19 +229,62 @@ export class MediaService {
       throw new BadRequestException('Tệp không tồn tại hoặc đã bị xóa.');
     }
 
-    await this.s3Client
-      .send(
-        new DeleteObjectCommand({
-          Bucket: this.bucketName,
-          Key: target.fileKey,
-        }),
-      )
-      .catch(() => null);
+    // 1. Xóa file chính trên S3 / R2 / Supabase Storage
+    if (target.fileKey) {
+      await this.s3Client
+        .send(
+          new DeleteObjectCommand({
+            Bucket: this.bucketName,
+            Key: target.fileKey,
+          }),
+        )
+        .catch(() => null);
+    }
 
-    await this.prisma.coupleMedia.delete({
-      where: { id: target.id },
-    });
+    // 2. Nếu là VIDEO có thumbnail đi kèm -> tìm và xóa luôn file thumbnail trên Storage + DB
+    if (target.thumbnailUrl) {
+      const thumbRecords = await this.prisma.coupleMedia.findMany({
+        where: {
+          coupleId,
+          remoteUrl: target.thumbnailUrl,
+          caption: 'thumbnail',
+        },
+      });
+
+      for (const thumb of thumbRecords) {
+        if (thumb.fileKey) {
+          await this.s3Client
+            .send(
+              new DeleteObjectCommand({
+                Bucket: this.bucketName,
+                Key: thumb.fileKey,
+              }),
+            )
+            .catch(() => null);
+        }
+      }
+
+      if (thumbRecords.length > 0) {
+        await this.prisma.coupleMedia
+          .deleteMany({
+            where: { id: { in: thumbRecords.map((t) => t.id) } },
+          })
+          .catch(() => null);
+      }
+    }
+
+    // 3. Xóa sạch cả trong bảng coupleMedia lẫn bảng post trên Supabase
+    await this.prisma.$transaction([
+      this.prisma.post.deleteMany({
+        where: {
+          coupleId,
+          mediaUrls: { has: target.remoteUrl },
+        },
+      }),
+      this.prisma.coupleMedia.delete({
+        where: { id: target.id },
+      }),
+    ]);
 
     return { deleted: true, id: target.id };
   }
-}
