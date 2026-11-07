@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "deploy": "nest deploy",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "cross-env NODE_OPTIONS=\"--dns-result-order=ipv4first\" nest start --env-file .env",
@@ -22,7 +22,7 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "postinstall": "prisma skills sync || exit 0"
+    "postinstall": "prisma generate && (prisma skills sync || exit 0)"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1156.0",
