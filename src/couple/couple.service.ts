@@ -1,7 +1,6 @@
 // src/couple/couple.service.ts
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -163,58 +162,173 @@ export class CoupleService {
       timezone: userTz,
     };
   }
+
   async getDailyQaWorkspace(coupleId: string, viewerUserId: string) {
-  const couple = await this.prisma.couple.findUnique({
-    where: { id: coupleId },
-    select: { activeQuestionId: true },
-  });
+    const couple = await this.prisma.couple.findUnique({
+      where: { id: coupleId },
+      select: { activeQuestionId: true },
+    });
 
-  const allRecords = await this.prisma.coupleDailyQA.findMany({
-    where: { coupleId },
-    orderBy: { updatedAt: 'desc' },
-    take: 100,
-  });
+    const allRecords = await this.prisma.coupleDailyQA.findMany({
+      where: { coupleId },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+    });
 
-  const formatRecord = (r: any) => {
-    const map = (r.answers as Record<string, any>) || {};
-    const bothAnswered = Object.keys(map).length >= 2;
-    const myEntry = map[viewerUserId];
-    const partnerEntry = Object.values(map).find((e: any) => e.userId !== viewerUserId);
+    const formatRecord = (r: any) => {
+      const map = (r.answers as Record<string, any>) || {};
+      const bothAnswered = Object.keys(map).length >= 2;
+      const myEntry = map[viewerUserId];
+      const partnerEntry = Object.values(map).find(
+        (e: any) => e.userId !== viewerUserId,
+      );
 
-    const safeMap: Record<string, any> = {};
-    for (const [uid, val] of Object.entries(map)) {
-      safeMap[uid] =
-        uid === viewerUserId || bothAnswered
-          ? val
-          : { ...val, answer: '', isLocked: true };
-    }
+      const safeMap: Record<string, any> = {};
+      for (const [uid, val] of Object.entries(map)) {
+        safeMap[uid] =
+          uid === viewerUserId || bothAnswered
+            ? val
+            : { ...val, answer: '', isLocked: true };
+      }
+
+      return {
+        questionId: r.questionId,
+        category: r.category,
+        questionText: r.questionText,
+        myAnswer: myEntry?.answer || '',
+        partnerAnswer: bothAnswered ? partnerEntry?.answer || null : null,
+        hasPartnerAnswered: Boolean(partnerEntry),
+        bothAnswered,
+        answeredAt: myEntry?.answeredAt || null,
+        answersByUserId: safeMap,
+      };
+    };
+
+    const activeId = couple?.activeQuestionId;
+    const activeRecord =
+      allRecords.find((r) => r.questionId === activeId) ||
+      allRecords[0] ||
+      null;
+
+    const history = allRecords
+      .filter((r) => Object.keys((r.answers as object) || {}).length > 0)
+      .map(formatRecord);
 
     return {
-      questionId: r.questionId,
-      category: r.category,
-      questionText: r.questionText,
-      myAnswer: myEntry?.answer || '',
-      partnerAnswer: bothAnswered ? partnerEntry?.answer || null : null,
-      hasPartnerAnswered: Boolean(partnerEntry),
-      bothAnswered,
-      answeredAt: myEntry?.answeredAt || null,
-      answersByUserId: safeMap,
+      activeQA: activeRecord ? formatRecord(activeRecord) : null,
+      history,
     };
-  };
+  }
 
-  const activeId = couple?.activeQuestionId;
-  const activeRecord =
-    allRecords.find((r) => r.questionId === activeId) || allRecords[0] || null;
+  async submitDailyQaAnswer(
+    coupleId: string,
+    userId: string,
+    dto: {
+      questionId: string;
+      questionText: string;
+      category: string;
+      nickname: string;
+      answer: string;
+    },
+  ) {
+    const cleanAnswer = (dto.answer || '').trim().slice(0, 1000);
+    if (!dto.questionId || !cleanAnswer) {
+      throw new BadRequestException('Thiếu mã câu hỏi hoặc nội dung trả lời.');
+    }
 
-  const history = allRecords
-    .filter((r) => Object.keys((r.answers as object) || {}).length > 0)
-    .map(formatRecord);
+    const nowIso = new Date().toISOString();
 
-  return {
-    activeQA: activeRecord ? formatRecord(activeRecord) : null,
-    history,
-  };
-}
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.coupleDailyQA.findUnique({
+        where: {
+          coupleId_questionId: {
+            coupleId,
+            questionId: dto.questionId,
+          },
+        },
+      });
+
+      const currentAnswers =
+        existing &&
+        typeof existing.answers === 'object' &&
+        existing.answers !== null
+          ? (existing.answers as Record<string, any>)
+          : {};
+
+      const nextAnswers = {
+        ...currentAnswers,
+        [userId]: {
+          userId,
+          nickname: dto.nickname || 'Người ấy',
+          answer: cleanAnswer,
+          answeredAt: nowIso,
+        },
+      };
+
+      await tx.coupleDailyQA.upsert({
+        where: {
+          coupleId_questionId: {
+            coupleId,
+            questionId: dto.questionId,
+          },
+        },
+        create: {
+          coupleId,
+          questionId: dto.questionId,
+          category: dto.category || 'FUNNY',
+          questionText: dto.questionText || '',
+          answers: nextAnswers,
+        },
+        update: {
+          answers: nextAnswers,
+        },
+      });
+
+      await tx.couple.update({
+        where: { id: coupleId },
+        data: { activeQuestionId: dto.questionId },
+      });
+    });
+
+    return this.getDailyQaWorkspace(coupleId, userId);
+  }
+
+  async rollDailyQaQuestion(
+    coupleId: string,
+    userId: string,
+    dto: { questionId: string; questionText: string; category: string },
+  ) {
+    if (!dto.questionId) {
+      throw new BadRequestException('Thiếu mã câu hỏi.');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.couple.update({
+        where: { id: coupleId },
+        data: { activeQuestionId: dto.questionId },
+      });
+
+      await tx.coupleDailyQA.upsert({
+        where: {
+          coupleId_questionId: {
+            coupleId,
+            questionId: dto.questionId,
+          },
+        },
+        create: {
+          coupleId,
+          questionId: dto.questionId,
+          category: dto.category || 'FUNNY',
+          questionText: dto.questionText || '',
+          answers: {},
+        },
+        update: {},
+      });
+    });
+
+    return this.getDailyQaWorkspace(coupleId, userId);
+  }
+
   async updateAnniversary(
     coupleId: string,
     anniversaryDate: string,

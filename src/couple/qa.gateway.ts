@@ -10,6 +10,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 
 interface SubmitAnswerPayload {
@@ -38,6 +39,7 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -52,8 +54,15 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      const payload = this.jwtService.verify(rawToken);
-      const userId = payload.sub || payload.id;
+      const secret =
+        this.configService.get<string>('JWT_ACCESS_SECRET') ||
+        this.configService.get<string>('JWT_SECRET');
+
+      const payload = this.jwtService.verify(
+        rawToken,
+        secret ? { secret } : undefined,
+      );
+      const userId = payload.sub || payload.id || payload.userId;
 
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
@@ -85,9 +94,6 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  /**
-   * Ẩn nội dung câu trả lời của đối phương nếu chưa đủ 2 người trả lời
-   */
   private sanitizeForUser(
     record: {
       questionId: string;
@@ -108,7 +114,7 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else {
         sanitizedAnswers[uid] = {
           ...entry,
-          answer: '', // Khóa nội dung thật trên đường truyền khi người kia chưa trả lời
+          answer: '',
           isLocked: true,
         };
       }
@@ -160,7 +166,6 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const cleanAnswer = dto.answer.trim().slice(0, 1000);
     const nowIso = new Date().toISOString();
 
-    // Sử dụng Serializable Transaction để chặn race condition khi 2 người gửi cùng 1 mili-giây
     const updatedRecord = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.coupleDailyQA.findUnique({
         where: {
@@ -172,7 +177,9 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
 
       const currentAnswers =
-        existing && typeof existing.answers === 'object' && existing.answers !== null
+        existing &&
+        typeof existing.answers === 'object' &&
+        existing.answers !== null
           ? (existing.answers as Record<string, any>)
           : {};
 
