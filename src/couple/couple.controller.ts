@@ -1,4 +1,4 @@
-// src/modules/couples/couple.controller.ts
+// src/couple/couple.controller.ts
 import {
   Body,
   Controller,
@@ -15,7 +15,7 @@ import { CoupleService } from './couple.service';
 import { ConnectCodeDto } from './dto/couple.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CoupleTenantGuard } from '../common/guards/couple-tenant.guard';
-import { PrismaService } from '@/prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 // avatarUri KHÔNG nằm trong 2 danh sách này: avatar được xử lý riêng theo avatarUpdatedAt
 const PROFILE_FIELDS = [
@@ -93,6 +93,34 @@ export class CoupleController {
     );
   }
 
+  // ==================== HỎI ĐÁP CẶP ĐÔI (DAILY QA) ====================
+  @Get('couples/daily-qa')
+  @UseGuards(CoupleTenantGuard)
+  getDailyQa(@Req() req: any) {
+    return this.coupleService.getDailyQaWorkspace(req.coupleId, req.user.id);
+  }
+
+  @Post('couples/daily-qa/answer')
+  @UseGuards(CoupleTenantGuard)
+  submitDailyQaAnswer(@Req() req: any, @Body() body: any) {
+    return this.coupleService.submitDailyQaAnswer(
+      req.coupleId,
+      req.user.id,
+      body,
+    );
+  }
+
+  @Post('couples/daily-qa/roll')
+  @UseGuards(CoupleTenantGuard)
+  rollDailyQaQuestion(@Req() req: any, @Body() body: any) {
+    return this.coupleService.rollDailyQaQuestion(
+      req.coupleId,
+      req.user.id,
+      body,
+    );
+  }
+
+  // ==================== SHARED SETTINGS ====================
   @Get('couples/shared-settings')
   @UseGuards(CoupleTenantGuard)
   async getSharedSettings(@Req() req: any) {
@@ -102,10 +130,7 @@ export class CoupleController {
     });
     return (couple?.sharedSettings as Record<string, any> | null) ?? {};
   }
-  @Get('daily-qa')
-getDailyQa(@Req() req: any) {
-  return this.coupleService.getDailyQaWorkspace(req.coupleId, req.user.id);
-}
+
   @Patch('couples/shared-settings')
   @UseGuards(CoupleTenantGuard)
   async patchSharedSettings(@Req() req: any, @Body() body: any) {
@@ -154,9 +179,6 @@ getDailyQa(@Req() req: any) {
       const existing: Record<string, any> = nextMembers[uid] ?? {};
       const merged: Record<string, any> = { ...existing };
 
-      // 2a. AVATAR: có "cổng" riêng theo avatarUpdatedAt, độc lập với các trường khác.
-      //     - null / rỗng / sai định dạng => bỏ qua, không bao giờ xóa avatar qua đồng bộ
-      //     - bản cache cũ không có avatarUpdatedAt không thể đè lên avatar đang có trên server
       if (isValidMediaUrl(incoming.avatarUri)) {
         const incAvTs = parseTs(incoming.avatarUpdatedAt);
         const curAvTs = parseTs(existing.avatarUpdatedAt);
@@ -169,7 +191,6 @@ getDailyQa(@Req() req: any) {
         }
       }
 
-      // 2b. Các trường còn lại: chỉ chặn dữ liệu cũ khi đó là hồ sơ của NGƯỜI KIA
       const incTs = parseTs(incoming.updatedAt);
       const curTs = parseTs(existing.updatedAt);
       const profileStale =
@@ -182,7 +203,6 @@ getDailyQa(@Req() req: any) {
           if (incoming[field] === undefined) continue;
           merged[field] = incoming[field];
         }
-        // Không tự bịa timestamp: giữ mốc mới nhất trong số hai bên (nếu có)
         const latestTs = Math.max(incTs, curTs);
         if (latestTs > 0) {
           merged.updatedAt =
