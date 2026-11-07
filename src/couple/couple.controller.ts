@@ -102,7 +102,10 @@ export class CoupleController {
     });
     return (couple?.sharedSettings as Record<string, any> | null) ?? {};
   }
-
+  @Get('daily-qa')
+getDailyQa(@Req() req: any) {
+  return this.coupleService.getDailyQaWorkspace(req.coupleId, req.user.id);
+}
   @Patch('couples/shared-settings')
   @UseGuards(CoupleTenantGuard)
   async patchSharedSettings(@Req() req: any, @Body() body: any) {

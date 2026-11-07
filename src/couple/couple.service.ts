@@ -163,7 +163,58 @@ export class CoupleService {
       timezone: userTz,
     };
   }
+  async getDailyQaWorkspace(coupleId: string, viewerUserId: string) {
+  const couple = await this.prisma.couple.findUnique({
+    where: { id: coupleId },
+    select: { activeQuestionId: true },
+  });
 
+  const allRecords = await this.prisma.coupleDailyQA.findMany({
+    where: { coupleId },
+    orderBy: { updatedAt: 'desc' },
+    take: 100,
+  });
+
+  const formatRecord = (r: any) => {
+    const map = (r.answers as Record<string, any>) || {};
+    const bothAnswered = Object.keys(map).length >= 2;
+    const myEntry = map[viewerUserId];
+    const partnerEntry = Object.values(map).find((e: any) => e.userId !== viewerUserId);
+
+    const safeMap: Record<string, any> = {};
+    for (const [uid, val] of Object.entries(map)) {
+      safeMap[uid] =
+        uid === viewerUserId || bothAnswered
+          ? val
+          : { ...val, answer: '', isLocked: true };
+    }
+
+    return {
+      questionId: r.questionId,
+      category: r.category,
+      questionText: r.questionText,
+      myAnswer: myEntry?.answer || '',
+      partnerAnswer: bothAnswered ? partnerEntry?.answer || null : null,
+      hasPartnerAnswered: Boolean(partnerEntry),
+      bothAnswered,
+      answeredAt: myEntry?.answeredAt || null,
+      answersByUserId: safeMap,
+    };
+  };
+
+  const activeId = couple?.activeQuestionId;
+  const activeRecord =
+    allRecords.find((r) => r.questionId === activeId) || allRecords[0] || null;
+
+  const history = allRecords
+    .filter((r) => Object.keys((r.answers as object) || {}).length > 0)
+    .map(formatRecord);
+
+  return {
+    activeQA: activeRecord ? formatRecord(activeRecord) : null,
+    history,
+  };
+}
   async updateAnniversary(
     coupleId: string,
     anniversaryDate: string,
