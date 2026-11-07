@@ -21,6 +21,13 @@ export class MediaService {
   private s3Client: S3Client;
   private bucketName: string;
 
+  // Số lượt cảm xúc tối đa lưu cho mỗi ảnh (lượt cũ nhất bị bỏ trước) để cột JSON không phình quá lớn
+  private static readonly MAX_REACTIONS_PER_MEDIA = 500;
+  private static readonly MAX_EMOJI_LENGTH = 16;
+
+  // Hàng đợi theo từng ảnh: nhiều lượt bấm liên tiếp được xử lý lần lượt, không ghi đè lên nhau
+  private reactionQueues = new Map<string, Promise<unknown>>();
+
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
@@ -193,33 +200,59 @@ export class MediaService {
     mediaId: string,
     emoji: string,
   ) {
-    const target = await this.prisma.coupleMedia.findFirst({
-      where: { id: mediaId, coupleId },
-    });
-    if (!target) {
-      throw new NotFoundException('Không tìm thấy khoảnh khắc này trên Cloud.');
+    const cleanEmoji = typeof emoji === 'string' ? emoji.trim() : '';
+    if (!cleanEmoji || cleanEmoji.length > MediaService.MAX_EMOJI_LENGTH) {
+      throw new BadRequestException('Cảm xúc không hợp lệ.');
     }
 
-    const currentReactions = Array.isArray(target.reactions)
-      ? (target.reactions as Array<Record<string, any>>)
-      : [];
+    // Xếp hàng theo từng ảnh để các lượt bấm liên tiếp không ghi đè lên nhau
+    return this.runInReactionQueue(mediaId, async () => {
+      const target = await this.prisma.coupleMedia.findFirst({
+        where: { id: mediaId, coupleId },
+      });
+      if (!target) {
+        throw new NotFoundException(
+          'Không tìm thấy khoảnh khắc này trên Cloud.',
+        );
+      }
 
-    const nextReactions = [
-      ...currentReactions.filter(
-        (r) => r.userId !== userId || r.emoji !== emoji,
-      ),
-      {
-        id: `${userId}_${Date.now()}`,
-        userId,
-        emoji,
-        createdAt: new Date().toISOString(),
-      },
-    ];
+      const currentReactions = Array.isArray(target.reactions)
+        ? (target.reactions as Array<Record<string, any>>)
+        : [];
 
-    return this.prisma.coupleMedia.update({
-      where: { id: mediaId },
-      data: { reactions: nextReactions },
+      // Mỗi lần bấm là một lượt mới: giữ nguyên các lượt cũ (kể cả cùng người, cùng emoji)
+      const nextReactions = [
+        ...currentReactions,
+        {
+          id: `${userId}_${Date.now()}_${randomUUID().slice(0, 8)}`,
+          userId,
+          emoji: cleanEmoji,
+          createdAt: new Date().toISOString(),
+        },
+      ].slice(-MediaService.MAX_REACTIONS_PER_MEDIA);
+
+      return this.prisma.coupleMedia.update({
+        where: { id: mediaId },
+        data: { reactions: nextReactions },
+      });
     });
+  }
+
+  private async runInReactionQueue<T>(
+    key: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.reactionQueues.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(task);
+    const tail = run.catch(() => undefined);
+    this.reactionQueues.set(key, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.reactionQueues.get(key) === tail) {
+        this.reactionQueues.delete(key);
+      }
+    }
   }
 
   async deleteMedia(coupleId: string, mediaId: string) {
