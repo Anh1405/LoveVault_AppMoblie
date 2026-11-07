@@ -130,7 +130,8 @@ model Couple {
   pairingCode          String?   @unique @map("pairing_code") @db.VarChar(6)
   pairingCodeExpiresAt DateTime? @map("pairing_code_expires_at") @db.Timestamptz(3)
 
-  sharedSettings Json? @map("shared_settings") @db.JsonB // Lưu themePreset, heroWallpaperUri, momoFund, loveCoupons, streakDays...
+  sharedSettings   Json?   @map("shared_settings") @db.JsonB // Lưu themePreset, heroWallpaperUri, momoFund, loveCoupons, streakDays...
+  activeQuestionId String? @default("q_fun_01") @map("active_question_id") @db.VarChar(64) // Mã câu hỏi Hỏi Đáp đang hiển thị chung cho cặp đôi
 
   status    CoupleStatus @default(PENDING)
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -143,12 +144,33 @@ model Couple {
   milestones     Milestone[]
   timeCapsules   TimeCapsule[]
   dailyAnswers   DailyAnswer[]
+  dailyQAs       CoupleDailyQA[]
   goals          CoupleGoal[]
   coupleMedias   CoupleMedia[]
 
   @@index([pairingCode, status])
   @@index([user1Id, user2Id])
   @@map("couples")
+}
+
+model CoupleDailyQA {
+  id       String @id @default(uuid()) @db.Uuid
+  coupleId String @map("couple_id") @db.Uuid
+  couple   Couple @relation(fields: [coupleId], references: [id], onDelete: Cascade)
+
+  questionId   String @map("question_id") @db.VarChar(64)
+  category     String @db.VarChar(50)
+  questionText String @map("question_text") @db.Text
+
+  // Cấu trúc JSONB: { "[userId]": { "userId": "...", "nickname": "...", "answer": "...", "answeredAt": "..." } }
+  answers Json @default("{}") @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([coupleId, questionId])
+  @@index([coupleId, updatedAt(sort: Desc)])
+  @@map("couple_daily_qas")
 }
 
 model CoupleWorkspaceState {
