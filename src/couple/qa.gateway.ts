@@ -262,4 +262,53 @@ export class QaGateway implements OnGatewayConnection, OnGatewayDisconnect {
     await this.broadcastStateToRoom(coupleId, record);
     return { status: 'OK' };
   }
+  // ==================== ĐỒNG BỘ TỨC THÌ NHẬT KÝ LOCKET ====================
+
+  @SubscribeMessage('locket:new_snap')
+  handleNewLocketSnap(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() snapPayload: any,
+  ) {
+    const { coupleId, userId } = client.data || {};
+    if (!coupleId || !userId || !snapPayload?.id) return;
+
+    // Phát tức thì tấm ảnh Locket vừa chụp sang màn hình của đối phương trong phòng
+    client.to(`couple:${coupleId}`).emit('locket:snap_created', {
+      ...snapPayload,
+      uploaderId: userId,
+    });
+    return { status: 'OK' };
+  }
+
+  @SubscribeMessage('locket:delete_snap')
+  handleDeleteLocketSnap(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { snapId: string; remoteUrl?: string },
+  ) {
+    const { coupleId } = client.data || {};
+    if (!coupleId || !body?.snapId) return;
+
+    client.to(`couple:${coupleId}`).emit('locket:snap_deleted', {
+      snapId: body.snapId,
+      remoteUrl: body.remoteUrl,
+    });
+    return { status: 'OK' };
+  }
+
+  @SubscribeMessage('locket:react_snap')
+  handleReactLocketSnap(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { snapId: string; emoji: string; reactions?: any[] },
+  ) {
+    const { coupleId, userId } = client.data || {};
+    if (!coupleId || !body?.snapId || !body?.emoji) return;
+
+    client.to(`couple:${coupleId}`).emit('locket:snap_reacted', {
+      snapId: body.snapId,
+      userId,
+      emoji: body.emoji,
+      reactions: body.reactions,
+    });
+    return { status: 'OK' };
+  }
 }
