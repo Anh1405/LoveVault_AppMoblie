@@ -10,6 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { mergeSyncItems } from './workspace-merge';
 import { Prisma } from '@prisma/client';
 import { CoupleService } from './couple.service';
 import { ConnectCodeDto } from './dto/couple.dto';
@@ -225,9 +226,9 @@ export class CoupleController {
   }
 
   @Get('couples/workspace-sync')
+  @UseGuards(CoupleTenantGuard)
   async getRoomWorkspace(@Req() req: any) {
-    const coupleId = req.coupleId || req.user?.coupleId || req.query?.coupleId;
-    if (!coupleId) return null;
+    const coupleId: string = req.coupleId;
 
     const [couple, state] = await Promise.all([
       this.prisma.couple.findUnique({ where: { id: coupleId } }),
@@ -238,6 +239,7 @@ export class CoupleController {
       coupleId,
       anniversaryDate: couple?.anniversaryDate ?? null,
       sharedSettings: couple?.sharedSettings ?? null,
+      // Mảng này CÓ chứa tombstone ({ id, deletedAt }) để máy kia biết mục nào đã xóa
       events: (state?.events as any[]) ?? [],
       goals: (state?.goals as any[]) ?? [],
       dailyQA: state?.dailyQA ?? null,
@@ -247,25 +249,46 @@ export class CoupleController {
   }
 
   @Put('couples/workspace-sync')
+  @UseGuards(CoupleTenantGuard)
   async upsertRoomWorkspace(@Req() req: any, @Body() body: any) {
-    const coupleId = req.coupleId || req.user?.coupleId || body.coupleId;
-    if (!coupleId) return { synced: false };
+    const coupleId: string = req.coupleId;
 
-    const saved = await this.prisma.coupleWorkspaceState.upsert({
-      where: { coupleId },
-      create: {
-        coupleId,
-        events: body.events ?? [],
-        goals: body.goals ?? [],
-        dailyQA: body.dailyQA ?? null,
-        qaHistory: body.qaHistory ?? [],
-      },
-      update: {
-        ...(Array.isArray(body.events) ? { events: body.events } : {}),
-        ...(Array.isArray(body.goals) ? { goals: body.goals } : {}),
-        ...(body.dailyQA !== undefined ? { dailyQA: body.dailyQA } : {}),
-        ...(Array.isArray(body.qaHistory) ? { qaHistory: body.qaHistory } : {}),
-      },
+    const saved = await this.prisma.$transaction(async (tx) => {
+      // Bảo đảm dòng tồn tại, rồi khóa dòng để hai máy đẩy cùng lúc không đè nhau
+      await tx.coupleWorkspaceState.upsert({
+        where: { coupleId },
+        create: { coupleId },
+        update: {},
+      });
+      const rows = await tx.$queryRaw<{ events: unknown; goals: unknown }[]>`
+        SELECT events, goals
+        FROM couple_workspace_states
+        WHERE couple_id = ${coupleId}::uuid
+        FOR UPDATE
+      `;
+      const current = rows[0] ?? { events: [], goals: [] };
+
+      const nextEvents = Array.isArray(body?.events)
+        ? mergeSyncItems(current.events, body.events)
+        : undefined;
+      const nextGoals = Array.isArray(body?.goals)
+        ? mergeSyncItems(current.goals, body.goals)
+        : undefined;
+
+      return tx.coupleWorkspaceState.update({
+        where: { coupleId },
+        data: {
+          ...(nextEvents
+            ? { events: nextEvents as unknown as Prisma.InputJsonValue }
+            : {}),
+          ...(nextGoals ? { goals: nextGoals as unknown as Prisma.InputJsonValue } : {}),
+          // Daily QA giữ nguyên cách ghi cũ
+          ...(body?.dailyQA !== undefined ? { dailyQA: body.dailyQA } : {}),
+          ...(Array.isArray(body?.qaHistory)
+            ? { qaHistory: body.qaHistory }
+            : {}),
+        },
+      });
     });
 
     return { synced: true, updatedAt: saved.updatedAt };
